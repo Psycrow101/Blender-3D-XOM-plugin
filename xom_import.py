@@ -154,6 +154,7 @@ def read_xnode(fd, parent_node=None, armature=None):
                                     (read_float(fd), read_float(fd), read_float(fd), 1.0))).transposed()
         pos = trmatix.to_translation()
         rot = trmatix.to_euler()
+        scale = mathutils.Vector((1, 1, 1))
     elif matrix_type == 2:
         pos = mathutils.Vector(read_vector(fd))
         rot = mathutils.Euler(read_vector(fd))
@@ -169,10 +170,10 @@ def read_xnode(fd, parent_node=None, armature=None):
         # todo: testing
         trmatix = trans_matrix(pos) * rotate_matrix(rot) * scale_matrix(scale)
     else:
-        trmatix = trans_matrix([0, 0, 0])
-        pos = mathutils.Vector([0, 0, 0])
-        rot = mathutils.Euler([0, 0, 0])
-        scale = mathutils.Vector([1, 1, 1])
+        trmatix = trans_matrix((0, 0, 0))
+        pos = mathutils.Vector((0, 0, 0))
+        rot = mathutils.Euler((0, 0, 0))
+        scale = mathutils.Vector((1, 1, 1))
 
     children_num = 0
     object = None
@@ -459,6 +460,10 @@ def import_xom3d_mesh(infile):
                 b.xom_rotation = node['rotation']
                 b.xom_scale = node['scale']
 
+                b.xom_base_location = mathutils.Vector((0, 0, 0))
+                b.xom_base_rotation = mathutils.Vector((0, 0, 0))
+                b.xom_base_scale = mathutils.Vector((0, 0, 0))
+
                 if b.xom_type == 'BG':
                     b.rotation_euler = node["jointorient"]
                 break
@@ -470,7 +475,7 @@ def import_xom3d_mesh(infile):
     scene.update()
 
 
-def import_xom3d_animation(infile):
+def import_xom3d_animation(infile, base_not_animation):
     scene = bpy.context.scene
 
     armature_object = scene.objects.active
@@ -500,6 +505,8 @@ def import_xom3d_animation(infile):
         xyz_type = read_short(file)
         keys = read_short(file)
 
+        bone = armature_object.pose.bones.get(obj_name)
+
         if xyz_type == 0:
             axis = 0
         elif xyz_type == 256:
@@ -518,14 +525,14 @@ def import_xom3d_animation(infile):
             frame = read_float(file) * fps
             value = read_float(file)
 
+            # fix the scale of the worm animation
+            if bone and bone.xom_has_base and prs_type == 2308:
+                value *= 0.5
+
             animation_data.append([frame, value, c1, c2, c3, c4])
 
-        # check the correct bones
-        try:
-            if obj_name not in armature.bones.keys() \
-                    or not armature_object.pose.bones.get(obj_name).xom_type:
-                continue
-        except AttributeError:
+        # check the correct bone
+        if not bone or not bone.xom_type:
             continue
 
         # todo: for others prs_type
@@ -551,7 +558,7 @@ def import_xom3d_animation(infile):
 
     # scale
     for bone_name, data in scale_data.items():
-        bone = armature_object.pose.bones.get(bone_name)
+        bone = armature_object.pose.bones[bone_name]
 
         if bone.xom_type == 'BG':
             scale_origin_data = mathutils.Vector((1, 1, 1))
@@ -576,13 +583,14 @@ def import_xom3d_animation(infile):
 
             frames_num = math.ceil((max(frames_data, key=lambda _f: _f[0])[0])) + 1
             for k in range(frames_num):
+                val = 1.0 + bone.xom_base_scale[axis] + calculate_frame_value(k, frames_data) - scale_origin_data[axis]
                 curve.keyframe_points.add(1)
-                curve.keyframe_points[k].co = k, 1.0 + calculate_frame_value(k, frames_data) - scale_origin_data[axis]
+                curve.keyframe_points[k].co = k, val
             curve.update()
 
     # rotation
     for bone_name, data in rot_data.items():
-        bone = armature_object.pose.bones.get(bone_name)
+        bone = armature_object.pose.bones[bone_name]
 
         if bone.xom_type == 'BG':
             rot_origin_data = mathutils.Euler((0, 0, 0))
@@ -607,15 +615,16 @@ def import_xom3d_animation(infile):
 
             frames_num = math.ceil((max(frames_data, key=lambda _f: _f[0])[0])) + 1
             for k in range(frames_num):
+                val = bone.xom_base_rotation[axis] + calculate_frame_value(k, frames_data) - rot_origin_data[axis]
                 curve.keyframe_points.add(1)
-                curve.keyframe_points[k].co = k, calculate_frame_value(k, frames_data) - rot_origin_data[axis]
+                curve.keyframe_points[k].co = k, val
             curve.update()
 
     # location
     original_frame = scene.frame_current
 
     for bone_name, data in loc_data.items():
-        bone = armature_object.pose.bones.get(bone_name)
+        bone = armature_object.pose.bones[bone_name]
 
         loc_origin_data = mathutils.Vector(bone.xom_location)
         is_bone = bone.xom_type == 'BG'
@@ -647,7 +656,7 @@ def import_xom3d_animation(infile):
                 continue
 
             for k in range(frames_num):
-                loc_apply_data[k][axis] = calculate_frame_value(k, frames_data)
+                loc_apply_data[k][axis] = bone.xom_base_location[axis] + calculate_frame_value(k, frames_data)
 
         for k in range(frames_num):
             scene.frame_set(k)
@@ -673,6 +682,14 @@ def import_xom3d_animation(infile):
             y_ax = bone.y_axis
             z_ax = bone.z_axis
 
+            # todo: fix that
+            if x_ax.length == 0.0:
+                x_ax = mathutils.Vector((1, 0, 0))
+            if y_ax.length == 0.0:
+                y_ax = mathutils.Vector((0, 1, 0))
+            if z_ax.length == 0.0:
+                z_ax = mathutils.Vector((0, 0, 1))
+
             if is_bone:
                 vec = dif_vec.copy()
                 dif_vec[0] = vec[0] * x_ax[0] + vec[1] * x_ax[1] + vec[2] * x_ax[2]
@@ -680,13 +697,13 @@ def import_xom3d_animation(infile):
                 dif_vec[2] = vec[0] * z_ax[0] + vec[1] * z_ax[1] + vec[2] * z_ax[2]
             else:
                 d = x_ax[0] * y_ax[1] * z_ax[2] + x_ax[1] * y_ax[2] * z_ax[0] + x_ax[2] * y_ax[0] * z_ax[1] - x_ax[2] * \
-                        y_ax[1] * z_ax[0] - x_ax[0] * y_ax[2] * z_ax[1] - x_ax[1] * y_ax[0] * z_ax[2]
+                    y_ax[1] * z_ax[0] - x_ax[0] * y_ax[2] * z_ax[1] - x_ax[1] * y_ax[0] * z_ax[2]
                 d1 = dif_vec[0] * y_ax[1] * z_ax[2] + x_ax[1] * y_ax[2] * dif_vec[2] + x_ax[2] * dif_vec[1] * z_ax[1] - \
-                         x_ax[2] * y_ax[1] * dif_vec[2] - dif_vec[0] * y_ax[2] * z_ax[1] - x_ax[1] * dif_vec[1] * z_ax[2]
+                     x_ax[2] * y_ax[1] * dif_vec[2] - dif_vec[0] * y_ax[2] * z_ax[1] - x_ax[1] * dif_vec[1] * z_ax[2]
                 d2 = x_ax[0] * dif_vec[1] * z_ax[2] + dif_vec[0] * y_ax[2] * z_ax[0] + x_ax[2] * y_ax[0] * dif_vec[2] - \
-                         x_ax[2] * dif_vec[1] * z_ax[0] - x_ax[0] * y_ax[2] * dif_vec[2] - dif_vec[0] * y_ax[0] * z_ax[2]
+                     x_ax[2] * dif_vec[1] * z_ax[0] - x_ax[0] * y_ax[2] * dif_vec[2] - dif_vec[0] * y_ax[0] * z_ax[2]
                 d3 = x_ax[0] * y_ax[1] * dif_vec[2] + x_ax[1] * dif_vec[1] * z_ax[0] + dif_vec[0] * y_ax[0] * z_ax[1] - \
-                        dif_vec[0] * y_ax[1] * z_ax[0] - x_ax[0] * dif_vec[1] * z_ax[1] - x_ax[1] * y_ax[0] * dif_vec[2]
+                     dif_vec[0] * y_ax[1] * z_ax[0] - x_ax[0] * dif_vec[1] * z_ax[1] - x_ax[1] * y_ax[0] * dif_vec[2]
 
                 dif_vec[0] = d1 / d
                 dif_vec[1] = d2 / d
@@ -701,18 +718,53 @@ def import_xom3d_animation(infile):
 
     scene.frame_set(original_frame)
 
-    armature_object.animation_data_create()
-    armature_object.animation_data.action = action
+    # save base data
+    if anim_name == 'Base':
+        for bone_name, data in scale_data.items():
+            bone = armature_object.pose.bones[bone_name]
+            bone.xom_has_base = True
+
+            vec = mathutils.Vector((0, 0, 0))
+            for axis in (0, 1, 2):
+                if data[axis]:
+                    vec[axis] = data[axis][0][1] * 0.5
+            bone.xom_base_scale = vec
+
+        for bone_name, data in rot_data.items():
+            bone = armature_object.pose.bones[bone_name]
+            bone.xom_has_base = True
+
+            vec = mathutils.Vector((0, 0, 0))
+            for axis in (0, 1, 2):
+                if data[axis]:
+                    vec[axis] = data[axis][0][1]
+            bone.xom_base_rotation = vec
+
+        for bone_name, data in loc_data.items():
+            bone = armature_object.pose.bones[bone_name]
+            bone.xom_has_base = True
+
+            vec = mathutils.Vector((0, 0, 0))
+            for axis in (0, 1, 2):
+                if data[axis]:
+                    vec[axis] = data[axis][0][1]
+            bone.xom_base_location = vec
+
+    if anim_name == 'Base' and base_not_animation:
+        bpy.data.actions.remove(action)
+    else:
+        armature_object.animation_data_clear()
+        armature_object.animation_data_create().action = action
 
     bpy.ops.object.mode_set(mode='OBJECT')
 
 
-def import_xom3d_file(self, filepath):
+def import_xom3d_file(self, filepath, base_not_animation):
     filepath_lc = filepath.lower()
     if filepath_lc.endswith('.xom3d'):
         import_xom3d_mesh(filepath)
     elif filepath_lc.endswith('.xac'):
-        import_xom3d_animation(filepath)
+        import_xom3d_animation(filepath, base_not_animation)
 
 
 # -----------------------------------------------------------------------------
@@ -740,8 +792,14 @@ class IMPORT_OT_xom3d(bpy.types.Operator):
         options={'HIDDEN'},
     )
 
+    base_not_animation = BoolProperty(
+        name="Only data for Base",
+        description="Do not create Base animation",
+        default=True
+    )
+
     def execute(self, context):
-        import_xom3d_file(self, self.filepath)
+        import_xom3d_file(self, self.filepath, self.base_not_animation)
         return {'FINISHED'}
 
     def invoke(self, context, event):
@@ -764,6 +822,11 @@ def register():
     bpy.types.PoseBone.xom_location = bpy.props.FloatVectorProperty(name="XOM Location")
     bpy.types.PoseBone.xom_rotation = bpy.props.FloatVectorProperty(name="XOM Rotation")
     bpy.types.PoseBone.xom_scale = bpy.props.FloatVectorProperty(name="XOM Scale")
+
+    bpy.types.PoseBone.xom_has_base = bpy.props.BoolProperty(name="XOM Has Base")
+    bpy.types.PoseBone.xom_base_location = bpy.props.FloatVectorProperty(name="XOM Base Location")
+    bpy.types.PoseBone.xom_base_rotation = bpy.props.FloatVectorProperty(name="XOM Base Rotation")
+    bpy.types.PoseBone.xom_base_scale = bpy.props.FloatVectorProperty(name="XOM Base Scale")
 
 
 def unregister():
