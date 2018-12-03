@@ -235,21 +235,8 @@ def read_xnode(fd, parent_node=None, armature=None):
                 node["object"] = object
 
     # todo:
-    # XChildSelector
-    elif x_type == "CS":
-        children_num = read_short(fd)
-
-        object = armature.edit_bones.new(x_name)
-        object.head = (0, 0, 0)
-        object.tail = (0, 0, 1)
-
-        if type(parent_node["object"]) == bpy.types.EditBone:
-            object.parent = parent_node["object"]
-            object.matrix = parent_node["object"].matrix
-
-    # todo:
-    # XBinModifier
-    elif x_type == "BM":
+    # XBinModifier or XChildSelector
+    elif x_type == "BM" or x_type == "CS":
         children_num = read_short(fd)
 
         object = armature.edit_bones.new(x_name)
@@ -262,7 +249,7 @@ def read_xnode(fd, parent_node=None, armature=None):
 
     # XShape or XSkinShape
     elif x_type == "SH" or x_type == "SS":
-        mesh = bpy.data.meshes.new(x_name)
+        md = bpy.data.meshes.new(x_name)
 
         faces_num = read_short(fd)
         faces = [read_short_vector(fd) for _ in range(faces_num)]
@@ -270,48 +257,47 @@ def read_xnode(fd, parent_node=None, armature=None):
         vertices_num = read_short(fd)
         vertices = [read_vector(fd) for _ in range(vertices_num)]
 
-        mesh.from_pydata(vertices, [], faces)
+        md.from_pydata(vertices, [], faces)
 
-        # if it's a color
+        # if it's a normal vector
         if read_bool(fd):
             for i in range(vertices_num):
-                mesh.vertices[i].normal = read_vector(fd)
+                md.vertices[i].normal = read_vector(fd)
 
-        for p in mesh.polygons:
+        for p in md.polygons:
             p.use_smooth = True
 
-        # todo: testing
+        # todo
         # if it's a color
         if read_bool(fd):
             colors = [read_color(fd) for _ in range(vertices_num)]
 
-            vcolor = mesh.vertex_colors.new()
-            for p in mesh.polygons:
+            vcolor = md.vertex_colors.new()
+            for p in md.polygons:
                 for i in p.loop_indices:
-                    vcolor.data[i].color = colors[mesh.loops[i].vertex_index]
+                    vcolor.data[i].color = colors[md.loops[i].vertex_index]
 
-            m.vertex_colors.active = vcolor
-            # bpy.ops.object.mode_set(mode='VERTEX_PAINT')
+            md.vertex_colors.active = vcolor
 
         # if it's an UV
         if read_bool(fd):
+            bm = bmesh.new()
+            bm.from_mesh(md)
+            bm.faces.ensure_lookup_table()
+
+            uv_layer = bm.loops.layers.uv.new()
             uv = [struct.unpack('<ff', fd.read(8)) for _ in range(vertices_num)]
 
-            mesh.uv_textures.new(x_name)
-            bm = bmesh.new()
-            bm.from_mesh(mesh)
+            for i, f in enumerate(faces):
+                face = bm.faces[i]
+                face.loops[0][uv_layer].uv = uv[f[0]]
+                face.loops[1][uv_layer].uv = uv[f[1]]
+                face.loops[2][uv_layer].uv = uv[f[2]]
 
-            uv_layer = bm.loops.layers.uv[0]
-            bm.faces.ensure_lookup_table()
-            for f in range(faces_num):
-                bm.faces[f].loops[0][uv_layer].uv = uv[faces[f][0]]
-                bm.faces[f].loops[1][uv_layer].uv = uv[faces[f][1]]
-                bm.faces[f].loops[2][uv_layer].uv = uv[faces[f][2]]
+            bm.to_mesh(md)
+            bm.free()
 
-            bm.to_mesh(mesh)
-
-        # todo: testing
-        mat = bpy.data.materials.new(name="Material")
+        mat = bpy.data.materials.new(name='Material')
 
         # if it's a material
         if read_bool(fd):
@@ -324,8 +310,8 @@ def read_xnode(fd, parent_node=None, armature=None):
         else:
             mat.diffuse_color = (1, 1, 1)
 
-        is_texture = read_bool(fd)
-        if is_texture:
+        # if it's a texture
+        if read_bool(fd):
             texture_name = read_string(fd)
             tex = bpy.data.textures.new(texture_name, type='IMAGE')
             slot = mat.texture_slots.add()
@@ -334,14 +320,9 @@ def read_xnode(fd, parent_node=None, armature=None):
             if image:
                 tex.image = image
                 depth = image.depth
-                for uv_text in mesh.uv_textures[0].data:
-                    uv_text.image = image
 
-                # for area in bpy.context.screen.areas:
-                #    if area.type == 'VIEW_3D':
-                #        for space in area.spaces:
-                #            if space.type == 'VIEW_3D':
-                #                space.viewport_shade = 'TEXTURED'
+                for uv_text in md.uv_textures.active.data:
+                    uv_text.image = image
 
                 slot.texture = tex
                 slot.texture_coords = 'UV'
@@ -354,21 +335,19 @@ def read_xnode(fd, parent_node=None, armature=None):
                     image.use_alpha = True
                     mat.use_transparency = True
 
-        mesh.materials.append(mat)
-        mesh.update()
-
-        object = [mesh]
+        md.materials.append(mat)
+        md.update()
 
         # XSkinShape
         if x_type == "SS":
-            bones_num = read_short(fd)
-            object.append(bones_num)
+            groups_num = read_short(fd)
+            groups_names = [read_string(fd) for _ in range(groups_num)]
+            groups_weights = [[read_float(fd) for _ in range(groups_num)] for _ in range(vertices_num)]
+        else:
+            groups_names = [parent_node["name"]]
+            groups_weights = [[1.0] for _ in range(vertices_num)]
 
-            groups_name = [read_string(fd) for _ in range(bones_num)]
-            object.append(groups_name)
-
-            weights = [[read_float(fd) for _ in range(bones_num)] for _ in range(vertices_num)]
-            object.append(weights)
+        object = { 'data': md, 'groups_names': groups_names, 'groups_weights': groups_weights }
 
     if not ndata:
         ndata = {
@@ -414,39 +393,32 @@ def import_xom3d_mesh(infile):
 
     bpy.ops.object.mode_set(mode='OBJECT')
     for node in nodes_data:
-        if node["type"] == "SH":
-            object = bpy.data.objects.new(node["name"], node["object"][0])
-            scene.objects.link(object)
-            object.matrix_local = armature.pose.bones.get(node["parent"]["name"]).matrix
+        if node["type"] != "SH" and node["type"] != "SS":
+            continue
 
-            object.vertex_groups.new(node["parent"]["name"])
-            for vertex_index in range(len(object.data.vertices)):
-                object.vertex_groups[0].add([vertex_index], 1.0, 'REPLACE')
+        mesh = bpy.data.objects.new(node["name"], node["object"]["data"])
 
-            bpy.ops.object.select_all(action='DESELECT')
-            object.select = True
-            armature.select = True
-            scene.objects.active = armature
-            bpy.ops.object.parent_set(type='ARMATURE', keep_transform=False)
+        # todo: for BM
+        parent_bone = armature.pose.bones.get(node["parent"]["name"])
 
-        if node["type"] == "SS":
-            object = bpy.data.objects.new(node["name"], node["object"][0])
-            scene.objects.link(object)
+        if parent_bone:
+            mesh.matrix_local = parent_bone.matrix
+        mesh.parent = armature
+        scene.objects.link(mesh)
 
-            # todo: testing
-            for b in range(node["object"][1]):
-                object.vertex_groups.new(node["object"][2][b])
+        modifier = mesh.modifiers.new(type='ARMATURE', name='Armature')
+        modifier.object = armature
 
-            for vertex_index in range(len(object.data.vertices)):
-                for b in range(node["object"][1]):
-                    if node["object"][3][vertex_index][b] > 0:
-                        object.vertex_groups[b].add([vertex_index], node["object"][3][vertex_index][b], 'REPLACE')
+        groups_names = node["object"]["groups_names"]
+        groups_weights = node["object"]["groups_weights"]
+        for i, g in enumerate(groups_names):
+            vg = mesh.vertex_groups.new(g)
+            for v, w in enumerate(groups_weights):
+                if w[i] > 0:
+                    vg.add([v], w[i], 'REPLACE')
 
-            bpy.ops.object.select_all(action='DESELECT')
-            object.select = True
-            armature.select = True
-            scene.objects.active = armature
-            bpy.ops.object.parent_set(type='ARMATURE', keep_transform=False)
+        if node["parent"]["type"] == 'CS':
+            parent_bone.xom_child_selector.add().child_name = node["name"]
 
     bpy.ops.object.mode_set(mode='POSE')
 
@@ -497,7 +469,7 @@ def import_xom3d_animation(infile, base_not_animation):
     fps = scene.render.fps
     last_frame = fps * maxkey
 
-    loc_data, rot_data, scale_data = {}, {}, {}
+    loc_data, rot_data, scale_data, tex_data = {}, {}, {}, {}
 
     for _ in range(num):
         obj_name = read_string(file)
@@ -548,6 +520,8 @@ def import_xom3d_animation(infile, base_not_animation):
             if not scale_data.get(obj_name):
                 scale_data[obj_name] = [None, None, None]
             scale_data[obj_name][axis] = animation_data
+        elif prs_type == 4352:
+            tex_data[obj_name] = animation_data
 
     file.close()
 
@@ -586,7 +560,7 @@ def import_xom3d_animation(infile, base_not_animation):
                 val = 1.0 + bone.xom_base_scale[axis] + calculate_frame_value(k, frames_data) - scale_origin_data[axis]
                 curve.keyframe_points.add(1)
                 curve.keyframe_points[k].co = k, val
-            curve.update()
+                curve.keyframe_points[k].interpolation = 'LINEAR'
 
     # rotation
     for bone_name, data in rot_data.items():
@@ -618,7 +592,7 @@ def import_xom3d_animation(infile, base_not_animation):
                 val = bone.xom_base_rotation[axis] + calculate_frame_value(k, frames_data) - rot_origin_data[axis]
                 curve.keyframe_points.add(1)
                 curve.keyframe_points[k].co = k, val
-            curve.update()
+                curve.keyframe_points[k].interpolation = 'LINEAR'
 
     # location
     original_frame = scene.frame_current
@@ -712,11 +686,46 @@ def import_xom3d_animation(infile, base_not_animation):
             for axis in (0, 1, 2):
                 curves[axis].keyframe_points.add(1)
                 curves[axis].keyframe_points[k].co = k, dif_vec[axis]
-
-        for c in curves:
-            c.update()
+                curves[axis].keyframe_points[k].interpolation = 'LINEAR'
 
     scene.frame_set(original_frame)
+
+    # texture animation (CS)
+    for bone_name, data in tex_data.items():
+        bone = armature_object.pose.bones[bone_name]
+
+        for i, c in enumerate(bone.xom_child_selector):
+            mesh = bpy.context.scene.objects.get(c.child_name)
+
+            if not c:
+                continue
+
+            mesh_action = bpy.data.actions.new(mesh.name)
+            group = mesh_action.groups.new(name=mesh.name)
+
+            curve1 = mesh_action.fcurves.new(data_path='hide')
+            curve1.group = group
+
+            curve2 = mesh_action.fcurves.new(data_path='hide_render')
+            curve2.group = group
+
+            for d in data:
+                val = math.ceil(bone.xom_base_tex + d[1]) - 1
+
+                curve1.keyframe_points.add(1)
+                curve2.keyframe_points.add(1)
+
+                curve1.keyframe_points[-1].co = d[0], val != i
+                curve2.keyframe_points[-1].co = d[0], val != i
+
+                curve1.keyframe_points[-1].interpolation = 'CONSTANT'
+                curve2.keyframe_points[-1].interpolation = 'CONSTANT'
+
+            if anim_name == 'Base' and base_not_animation:
+                bpy.data.actions.remove(mesh_action)
+            else:
+                mesh.animation_data_clear()
+                mesh.animation_data_create().action = mesh_action
 
     # save base data
     if anim_name == 'Base':
@@ -749,6 +758,11 @@ def import_xom3d_animation(infile, base_not_animation):
                 if data[axis]:
                     vec[axis] = data[axis][0][1]
             bone.xom_base_location = vec
+
+        for bone_name, data in tex_data.items():
+            bone = armature_object.pose.bones[bone_name]
+            bone.xom_has_base = True
+            bone.xom_base_tex = data[0][1]
 
     if anim_name == 'Base' and base_not_animation:
         bpy.data.actions.remove(action)
@@ -810,6 +824,11 @@ class IMPORT_OT_xom3d(bpy.types.Operator):
 
 # -----------------------------------------------------------------------------
 # Register
+
+class XomChildItem(bpy.types.PropertyGroup):
+    child_name = bpy.props.StringProperty(name="XOM Child Name", options={'HIDDEN'})
+
+
 def import_xom3d_button(self, context):
     self.layout.operator(IMPORT_OT_xom3d.bl_idname,
                          text="Xom 3DModel (.xom3d, .xac)")
@@ -818,15 +837,18 @@ def import_xom3d_button(self, context):
 def register():
     bpy.utils.register_module(__name__)
     bpy.types.INFO_MT_file_import.append(import_xom3d_button)
-    bpy.types.PoseBone.xom_type = bpy.props.StringProperty(name="XOM Type")
-    bpy.types.PoseBone.xom_location = bpy.props.FloatVectorProperty(name="XOM Location")
-    bpy.types.PoseBone.xom_rotation = bpy.props.FloatVectorProperty(name="XOM Rotation")
-    bpy.types.PoseBone.xom_scale = bpy.props.FloatVectorProperty(name="XOM Scale")
+    bpy.types.PoseBone.xom_type = bpy.props.StringProperty(name="XOM Type", options={'HIDDEN'})
+    bpy.types.PoseBone.xom_location = bpy.props.FloatVectorProperty(name="XOM Location", options={'HIDDEN'})
+    bpy.types.PoseBone.xom_rotation = bpy.props.FloatVectorProperty(name="XOM Rotation", options={'HIDDEN'})
+    bpy.types.PoseBone.xom_scale = bpy.props.FloatVectorProperty(name="XOM Scale", options={'HIDDEN'})
 
-    bpy.types.PoseBone.xom_has_base = bpy.props.BoolProperty(name="XOM Has Base")
-    bpy.types.PoseBone.xom_base_location = bpy.props.FloatVectorProperty(name="XOM Base Location")
-    bpy.types.PoseBone.xom_base_rotation = bpy.props.FloatVectorProperty(name="XOM Base Rotation")
-    bpy.types.PoseBone.xom_base_scale = bpy.props.FloatVectorProperty(name="XOM Base Scale")
+    bpy.types.PoseBone.xom_child_selector = bpy.props.CollectionProperty(type=XomChildItem, options={'HIDDEN'})
+
+    bpy.types.PoseBone.xom_has_base = bpy.props.BoolProperty(name="XOM Has Base", options={'HIDDEN'})
+    bpy.types.PoseBone.xom_base_location = bpy.props.FloatVectorProperty(name="XOM Base Location", options={'HIDDEN'})
+    bpy.types.PoseBone.xom_base_rotation = bpy.props.FloatVectorProperty(name="XOM Base Rotation", options={'HIDDEN'})
+    bpy.types.PoseBone.xom_base_scale = bpy.props.FloatVectorProperty(name="XOM Base Scale", options={'HIDDEN'})
+    bpy.types.PoseBone.xom_base_tex = bpy.props.FloatProperty(name="XOM Base Texture", options={'HIDDEN'})
 
 
 def unregister():
