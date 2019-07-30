@@ -4,20 +4,8 @@ import os
 import struct
 import math
 import mathutils
-import bpy_extras.image_utils
-
-
-bl_info = {
-    "name": "Import Xom 3D Model / Animation",
-    "author": "Psycrow",
-    "version": (1, 0, 3),
-    "blender": (2, 79, 0),
-    "location": "File > Import > Import Xom 3D Model / Animation (.xom3d, .xac)",
-    "description": "Import Xom 3D Model / Animation from XomView format (.xom3d, .xac).",
-    "warning": "",
-    "wiki_url": "",
-    "category": "Import-Export",
-}
+from bpy_extras.image_utils import load_image
+from bpy_extras import node_shader_utils
 
 
 def trans_matrix(v):
@@ -153,7 +141,7 @@ def read_xnode(fd, parent_node=None, armature=None):
         pos = mathutils.Vector(read_vector(fd))
         rot = mathutils.Euler(read_vector(fd))
         scale = read_vector(fd)
-        trmatix = trans_matrix(pos) * rotate_matrix(rot) * scale_matrix(scale)
+        trmatix = trans_matrix(pos) @ rotate_matrix(rot) @ scale_matrix(scale)
     elif matrix_type == 3:
         pos = mathutils.Vector(read_vector(fd))
         rot = mathutils.Euler(read_vector(fd))
@@ -162,7 +150,7 @@ def read_xnode(fd, parent_node=None, armature=None):
         scale = read_vector(fd)
 
         # todo: testing
-        trmatix = trans_matrix(pos) * rotate_matrix(rot) * scale_matrix(scale)
+        trmatix = trans_matrix(pos) @ rotate_matrix(rot) @ scale_matrix(scale)
     else:
         trmatix = trans_matrix((0, 0, 0))
         pos = mathutils.Vector((0, 0, 0))
@@ -177,14 +165,16 @@ def read_xnode(fd, parent_node=None, armature=None):
     if x_type == "IN":
         children_num = read_short(fd)
 
+        view_layer = bpy.context.view_layer
+        collection = view_layer.active_layer_collection.collection
+
         armature = bpy.data.armatures.new(x_name)
         object = bpy.data.objects.new(x_name, armature)
-        object.show_x_ray = True
+        object.show_in_front = True
 
-        scene = bpy.context.scene
-        scene.objects.link(object)
-        scene.objects.active = object
-        object.select = True
+        collection.objects.link(object)
+        view_layer.objects.active = object
+        object.select_set(True)
 
         bpy.ops.object.mode_set(mode='EDIT')
 
@@ -199,7 +189,7 @@ def read_xnode(fd, parent_node=None, armature=None):
 
         if type(parent_node["object"]) == bpy.types.EditBone:
             object.parent = parent_node["object"]
-            object.matrix = parent_node["object"].matrix * trmatix
+            object.matrix = parent_node["object"].matrix @ trmatix
         else:
             object.matrix = trmatix
 
@@ -298,44 +288,41 @@ def read_xnode(fd, parent_node=None, armature=None):
             bm.free()
 
         mat = bpy.data.materials.new(name='Material')
+        mat_wrap = node_shader_utils.PrincipledBSDFWrapper(mat, is_readonly=False)
 
         # if it's a material
+        # todo:
         if read_bool(fd):
             mat.name = read_string(fd)
-            mat.mirror_color = read_color(fd)
-            mat.diffuse_color = read_color(fd)
-            mat.specular_color = read_color(fd)
+            _mat_mirror_color = read_color(fd)
+            _mat_diffuse_color = read_color(fd)
+            _mat_specular_color = read_color(fd)
             mat.specular_intensity = 1.0
-            selfIllum_color = read_color(fd)
+            _mat_selfIllum_color = read_color(fd)
         else:
-            mat.diffuse_color = (1, 1, 1)
+            _mat_diffuse_color = (1, 1, 1)
 
         # if it's a texture
+        # todo:
         if read_bool(fd):
             texture_name = read_string(fd)
-            tex = bpy.data.textures.new(texture_name, type='IMAGE')
-            slot = mat.texture_slots.add()
-            image = bpy_extras.image_utils.load_image(texture_name, path)
-
+            tex = bpy.data.textures.get(texture_name)
+            if not tex:
+                tex = bpy.data.textures.new(texture_name, type='IMAGE')
+                image = load_image(texture_name, path)
+            else:
+                image = bpy.data.images.get(texture_name)
+                
             if image:
                 tex.image = image
                 depth = image.depth
 
-                for uv_text in md.uv_textures.active.data:
-                    uv_text.image = image
+                nodetex = mat_wrap.base_color_texture
+                nodetex.image = image
+                nodetex.texcoords = 'UV'
 
-                slot.texture = tex
-                slot.texture_coords = 'UV'
-                slot.use_map_color_diffuse = True
-
-                if depth in {32, 128}:
-                    slot.use_map_alpha = True
-                    tex.use_mipmap = True
-                    tex.use_interpolation = True
-                    image.use_alpha = True
-                    mat.use_transparency = True
-                    mat.alpha = 0
-                    mat.specular_alpha = 0
+                # if depth in {32, 128}:
+                #     mat.use_nodes = True
 
         md.materials.append(mat)
         md.update()
@@ -376,24 +363,21 @@ def read_xnode(fd, parent_node=None, armature=None):
     return ndata
 
 
-def import_xom3d_mesh(infile):
+def load_xom3d_mesh(filepath, global_matrix):
     global path, nodes_data
-    path = os.path.dirname(infile)
+    path = os.path.dirname(filepath)
 
-    file = open(infile, 'rb')
+    with open(filepath, 'rb') as fd:
+        file_type = read_string(fd)
+        assert file_type == "X3D", "Incorrect Xom3D Model format!"
 
-    file_type = read_string(file)
-    assert file_type == "X3D", "Incorrect Xom3D Model format!"
-
-    nodes_data = []
-    node_in = read_xnode(file)
-
-    file.close()
+        nodes_data = []
+        node_in = read_xnode(fd)
 
     if not node_in:
         return
 
-    scene = bpy.context.scene
+    view_layer = bpy.context.view_layer
     armature_object = node_in["object"]
     
     # set up mesh objects
@@ -409,15 +393,16 @@ def import_xom3d_mesh(infile):
             mesh_object.matrix_local = parent_bone.matrix.copy()
 
         mesh_object.parent = armature_object
-        scene.objects.link(mesh_object)
+        view_layer.active_layer_collection.collection.objects.link(mesh_object)
 
         modifier = mesh_object.modifiers.new(type='ARMATURE', name='Armature')
         modifier.object = armature_object
 
+        # todo:
         groups_names = node["object"]["groups_names"]
         groups_weights = node["object"]["groups_weights"]
         for i, g in enumerate(groups_names):
-            vg = mesh_object.vertex_groups.new(g)
+            vg = mesh_object.vertex_groups.new(name=g)
             for v, w in enumerate(groups_weights):
                 if w[i] > 0:
                     vg.add([v], w[i], 'REPLACE')
@@ -426,7 +411,7 @@ def import_xom3d_mesh(infile):
         if node["parent"]["type"] == 'CS':
             parent_bone.xom_child_selector.add().child_name = mesh_object.name
             if len(parent_bone.xom_child_selector) > 1:
-                mesh_object.hide = True
+                mesh_object.hide_viewport = True
                 mesh_object.hide_render = True
 
     # set up pose bones
@@ -448,18 +433,18 @@ def import_xom3d_mesh(infile):
                 break
 
     bpy.ops.object.mode_set(mode='OBJECT')
-    armature_object.matrix_world = mathutils.Matrix(((1.0, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1.0))).transposed()
+    armature_object.matrix_world = global_matrix
 
-    for o in scene.objects:
-        o.select = o == armature_object
+    for o in view_layer.objects:
+        o.select_set(o == armature_object)
 
-    scene.update()
+    view_layer.update()
 
 
-def import_xom3d_animation(infile, use_def_pose):
-    scene = bpy.context.scene
+def load_xom3d_animation(filepath, use_def_pose):
+    view_layer = bpy.context.view_layer
 
-    armature_object = scene.objects.active
+    armature_object = view_layer.objects.active
 
     if not armature_object:
         return
@@ -481,25 +466,25 @@ def import_xom3d_animation(infile, use_def_pose):
             # reset Child Selector
             if b.xom_child_selector:
                 for i, c in enumerate(b.xom_child_selector):
-                    mesh_object = scene.objects.get(c.child_name)
+                    mesh_object = view_layer.objects.get(c.child_name)
                     if mesh_object:
                         mesh_object.animation_data_clear()
-                        mesh_object.hide = (i != 0)
+                        mesh_object.hide_viewport = (i != 0)
                         mesh_object.hide_render = (i != 0)
 
     # reset texture offsets
-    for obj in scene.objects:
-        if obj.parent == armature_object:
-            mat = obj.active_material
-            mat.animation_data_clear()
-            mat.texture_slots[0].offset = mathutils.Vector((0.0, 0.0, 0.0))
+    # for obj in view_layer.objects:
+    #     if obj.parent == armature_object:
+    #         mat = obj.active_material
+    #         mat.animation_data_clear()
+    #         mat.texture_slots[0].offset = mathutils.Vector((0.0, 0.0, 0.0))
 
-    file = open(infile, 'rb')
+    file = open(filepath, 'rb')
 
     anim_name = read_string(file)
     maxkey = read_float(file)
     num = read_short(file)
-    fps = scene.render.fps
+    fps = bpy.context.scene.render.fps
     last_frame = fps * maxkey
 
     loc_data, rot_data, scale_data, tex_data, child_data = {}, {}, {}, {}, {}
@@ -537,7 +522,7 @@ def import_xom3d_animation(infile, use_def_pose):
             animation_data.append([frame, value, c1, c2, c3, c4])
 
         if prs_type == 1025:
-            if scene.objects.get(obj_name):
+            if view_layer.objects.get(obj_name):
                 if not tex_data.get(obj_name):
                     tex_data[obj_name] = [None, None]
                 tex_data[obj_name][axis] = animation_data
@@ -560,8 +545,8 @@ def import_xom3d_animation(infile, use_def_pose):
 
     file.close()
 
-    scene.frame_start = 0
-    scene.frame_end = int(last_frame)
+    bpy.context.scene.frame_start = 0
+    bpy.context.scene.frame_end = int(last_frame)
 
     action = bpy.data.actions.new(anim_name)
 
@@ -633,7 +618,7 @@ def import_xom3d_animation(infile, use_def_pose):
     temp_scale = {}
     for b in armature_object.pose.bones:
         temp_scale[b], b.scale = b.scale.copy(), mathutils.Vector((1, 1, 1))
-    scene.update()
+    view_layer.update()
 
     # location
     for bone_name, data in loc_data.items():
@@ -722,45 +707,45 @@ def import_xom3d_animation(infile, use_def_pose):
         b.scale = temp_scale[b]
 
     # texture animation
-    for obj_name, data in tex_data.items():
-        obj = scene.objects[obj_name]
-        mat = obj.active_material
+    # todo:
+    # for obj_name, data in tex_data.items():
+    #     obj = view_layer.objects[obj_name]
+    #     mat = obj.active_material
 
-        obj_action = bpy.data.actions.new(mat.name)
-        group = action.groups.new(name=mat.name)
+    #     obj_action = bpy.data.actions.new(mat.name)
+    #     group = action.groups.new(name=mat.name)
 
-        for axis in (0, 1):
-            frames_data = data[axis]
+    #     for axis in (0, 1):
+    #         frames_data = data[axis]
 
-            if not frames_data:
-                continue
+    #         if not frames_data:
+    #             continue
 
-            curve = obj_action.fcurves.new(data_path='texture_slots[0].offset', index=axis)
-            curve.group = group
+    #         curve = obj_action.fcurves.new(data_path='texture_slots[0].offset', index=axis)
+    #         curve.group = group
 
-            frames_num = math.ceil((max(frames_data, key=lambda _f: _f[0])[0])) + 1
-            for k in range(frames_num):
-                val = obj.xom_base_tex[axis] + calculate_frame_value(k, frames_data)
-                curve.keyframe_points.add(1)
-                curve.keyframe_points[k].co = k, val
-                curve.keyframe_points[k].interpolation = 'LINEAR'
+    #         frames_num = math.ceil((max(frames_data, key=lambda _f: _f[0])[0])) + 1
+    #         for k in range(frames_num):
+    #             val = obj.xom_base_tex[axis] + calculate_frame_value(k, frames_data)
+    #             curve.keyframe_points.add(1)
+    #             curve.keyframe_points[k].co = k, val
+    #             curve.keyframe_points[k].interpolation = 'LINEAR'
 
-        mat.animation_data_create().action = obj_action
+    #     mat.animation_data_create().action = obj_action
 
     # child selector animation (CS)
     for bone_name, data in child_data.items():
         bone = armature_object.pose.bones[bone_name]
 
         for i, c in enumerate(bone.xom_child_selector):
-            mesh_object = scene.objects.get(c.child_name)
-
+            mesh_object = view_layer.objects.get(c.child_name)
             if not mesh_object:
                 continue
 
             mesh_action = bpy.data.actions.new(mesh_object.name)
             group = mesh_action.groups.new(name=mesh_object.name)
 
-            curve1 = mesh_action.fcurves.new(data_path='hide')
+            curve1 = mesh_action.fcurves.new(data_path='hide_viewport')
             curve1.group = group
 
             curve2 = mesh_action.fcurves.new(data_path='hide_render')
@@ -813,7 +798,7 @@ def import_xom3d_animation(infile, use_def_pose):
             bone.xom_base_location = vec
 
         for obj_name, data in tex_data.items():
-            obj = scene.objects[obj_name]
+            obj = view_layer.objects[obj_name]
             vec = mathutils.Vector((0, 0, 0))
             for axis in (0, 1):
                 if data[axis]:
@@ -830,90 +815,11 @@ def import_xom3d_animation(infile, use_def_pose):
     bpy.ops.object.mode_set(mode='OBJECT')
 
 
-def import_xom3d_file(self, filepath, use_def_pose):
+def load(context, filepath, *, use_def_pose, global_matrix=None):
     filepath_lc = filepath.lower()
     if filepath_lc.endswith('.xom3d'):
-        import_xom3d_mesh(filepath)
+        load_xom3d_mesh(filepath, global_matrix)
     elif filepath_lc.endswith('.xac'):
-        import_xom3d_animation(filepath, use_def_pose)
+        load_xom3d_animation(filepath, use_def_pose)
 
-
-# -----------------------------------------------------------------------------
-# Operator
-
-class IMPORT_OT_xom3d(bpy.types.Operator):
-    """Import Xom 3D Model from XomView format"""
-    bl_idname = "import_scene.xom3d"
-    bl_label = "Import Xom 3D Model / Animation"
-    bl_region_type = "WINDOW"
-    bl_options = {'UNDO'}
-
-    # List of operator properties, the attributes will be assigned
-    # to the class instance from the operator settings before calling.
-    filepath = bpy.props.StringProperty(
-        name="File Path",
-        subtype='FILE_PATH',
-        description="File path used for importing the XMD3D/XAC file",
-        maxlen=1024,
-        default="",
-        options={'HIDDEN'}
-    )
-    filter_glob = bpy.props.StringProperty(
-        default="*.xom3d;*.xac",
-        options={'HIDDEN'},
-    )
-
-    use_def_pose = bpy.props.BoolProperty(
-        name="Reset pose",
-        description="Reset pose to default before loading animation",
-        default=True
-    )
-
-    def execute(self, context):
-        import_xom3d_file(self, self.filepath, self.use_def_pose)
-        return {'FINISHED'}
-
-    def invoke(self, context, event):
-        wm = context.window_manager
-        wm.fileselect_add(self)
-        return {'RUNNING_MODAL'}
-
-
-# -----------------------------------------------------------------------------
-# Register
-
-class XomChildItem(bpy.types.PropertyGroup):
-    child_name = bpy.props.StringProperty(name="XOM Child Name", options={'HIDDEN'})
-
-
-def import_xom3d_button(self, context):
-    self.layout.operator(IMPORT_OT_xom3d.bl_idname, text="Xom 3DModel (.xom3d, .xac)")
-
-
-def register():
-    bpy.utils.register_module(__name__)
-    bpy.types.INFO_MT_file_import.append(import_xom3d_button)
-    bpy.types.PoseBone.xom_type = bpy.props.StringProperty(name="XOM Type", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_location = bpy.props.FloatVectorProperty(name="XOM Location", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_rotation = bpy.props.FloatVectorProperty(name="XOM Rotation", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_scale = bpy.props.FloatVectorProperty(name="XOM Scale", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_jointorient = bpy.props.FloatVectorProperty(name="XOM Joint Orientation", options={'HIDDEN'})
-
-    bpy.types.PoseBone.xom_child_selector = bpy.props.CollectionProperty(type=XomChildItem, options={'HIDDEN'})
-
-    bpy.types.PoseBone.xom_has_base = bpy.props.BoolProperty(name="XOM Has Base", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_base_location = bpy.props.FloatVectorProperty(name="XOM Base Location", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_base_rotation = bpy.props.FloatVectorProperty(name="XOM Base Rotation", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_base_scale = bpy.props.FloatVectorProperty(name="XOM Base Scale", options={'HIDDEN'})
-    bpy.types.PoseBone.xom_base_cs = bpy.props.FloatProperty(name="XOM Base Child Selector", options={'HIDDEN'})
-
-    bpy.types.Object.xom_base_tex = bpy.props.FloatVectorProperty(name="XOM Base Texture Offset", options={'HIDDEN'})
-
-
-def unregister():
-    bpy.utils.unregister_module(__name__)
-    bpy.types.INFO_MT_file_import.remove(import_xom3d_button)
-
-
-if __name__ == "__main__":
-    register()
+    return {'FINISHED'}

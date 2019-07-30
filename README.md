@@ -9,7 +9,7 @@ The plugin cannot export loaded models. So you can't use it to make changes to t
 
 ## Requirements
 
-* Blender 3D (tested on 2.60)
+* Blender 3D (2.79 or 2.80)
 * [XomView v3.0](https://www.dropbox.com/s/vawww6wf8xdhq66/xom%20view.zip?dl=0) by AlexBond
 
 XomView is used to extract resources from the Worms game bundles, including the required `.xom3d`
