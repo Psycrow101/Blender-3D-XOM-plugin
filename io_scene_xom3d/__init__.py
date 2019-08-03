@@ -1,7 +1,24 @@
+import bpy
+from bpy.props import (
+    BoolProperty,
+    FloatProperty,
+    StringProperty,
+    FloatVectorProperty,
+    CollectionProperty,
+)
+from bpy.types import (
+    PoseBone,
+)
+from bpy_extras.io_utils import (
+    ImportHelper,
+    orientation_helper,
+    axis_conversion,
+)
+
 bl_info = {
     "name": "Import Xom 3D Model / Animation",
     "author": "Psycrow",
-    "version": (1, 1, 0),
+    "version": (1, 2, 0),
     "blender": (2, 80, 0),
     "location": "File > Import-Export",
     "description": "Import Xom 3D Model / Animation from XomView format (.xom3d, .xac)",
@@ -13,25 +30,9 @@ bl_info = {
 
 if "bpy" in locals():
     import importlib
+
     if "import_xom3d" in locals():
         importlib.reload(import_xom3d)
-
-import bpy
-from bpy.props import (
-        BoolProperty,
-        FloatProperty,
-        StringProperty,
-        FloatVectorProperty,
-        CollectionProperty,
-        )
-from bpy.types import (
-        PoseBone,
-    )
-from bpy_extras.io_utils import (
-        ImportHelper,
-        orientation_helper,
-        axis_conversion,
-        )
 
 
 @orientation_helper(axis_forward='-Z', axis_up='Y')
@@ -57,8 +58,8 @@ class ImportXom3D(bpy.types.Operator, ImportHelper):
                                             "filter_glob",
                                             ))
         keywords["global_matrix"] = axis_conversion(from_forward=self.axis_forward,
-                                        from_up=self.axis_up,
-                                        ).to_4x4()
+                                                    from_up=self.axis_up,
+                                                    ).to_4x4()
 
         return import_xom3d.load(context, **keywords)
 

@@ -105,10 +105,10 @@ def read_short_vector(fd):
 
 
 def read_color(fd):
-    return fd.read(1)[0] / 255.0, fd.read(1)[0] / 255.0, fd.read(1)[0] / 255.0
+    return fd.read(1)[0] / 255.0, fd.read(1)[0] / 255.0, fd.read(1)[0] / 255.0, 1.0
 
 
-def read_xnode(fd, parent_node=None, armature=None):
+def read_xnode(fd, context, parent_node=None, armature=None):
     global path, nodes_data
 
     x_type = read_string(fd)
@@ -158,23 +158,23 @@ def read_xnode(fd, parent_node=None, armature=None):
         scale = mathutils.Vector((1, 1, 1))
 
     children_num = 0
-    object = None
+    obj = None
 
     # XInteriorNode
     # create armature
     if x_type == "IN":
         children_num = read_short(fd)
 
-        view_layer = bpy.context.view_layer
+        view_layer = context.view_layer
         collection = view_layer.active_layer_collection.collection
 
         armature = bpy.data.armatures.new(x_name)
-        object = bpy.data.objects.new(x_name, armature)
-        object.show_in_front = True
+        obj = bpy.data.objects.new(x_name, armature)
+        obj.show_in_front = True
 
-        collection.objects.link(object)
-        view_layer.objects.active = object
-        object.select_set(True)
+        collection.objects.link(obj)
+        view_layer.objects.active = obj
+        obj.select_set(True)
 
         bpy.ops.object.mode_set(mode='EDIT')
 
@@ -183,15 +183,15 @@ def read_xnode(fd, parent_node=None, armature=None):
     elif x_type in ("GR", "GO"):
         children_num = read_short(fd)
 
-        object = armature.edit_bones.new(x_name)
-        object.head = (0, 0, 0)
-        object.tail = (0, 0, 1)
+        obj = armature.edit_bones.new(x_name)
+        obj.head = (0, 0, 0)
+        obj.tail = (0, 0, 1)
 
         if type(parent_node["object"]) == bpy.types.EditBone:
-            object.parent = parent_node["object"]
-            object.matrix = parent_node["object"].matrix @ trmatix
+            obj.parent = parent_node["object"]
+            obj.matrix = parent_node["object"].matrix @ trmatix
         else:
-            object.matrix = trmatix
+            obj.matrix = trmatix
 
     # XGroupShape or XSkin or XBinModifier
     # skip node
@@ -209,32 +209,32 @@ def read_xnode(fd, parent_node=None, armature=None):
     elif x_type == "BO":
         children_num = read_short(fd)
 
-        object = armature.edit_bones.new(parent_node["name"])
-        object.head = (0, 0, 0)
-        object.tail = (0, 0, 1)
+        obj = armature.edit_bones.new(parent_node["name"])
+        obj.head = (0, 0, 0)
+        obj.tail = (0, 0, 1)
 
-        object.matrix = trmatix.inverted_safe()
+        obj.matrix = trmatix.inverted_safe()
 
         if type(parent_node["parent"]["object"]) == bpy.types.EditBone:
-            object.parent = parent_node["parent"]["object"]
+            obj.parent = parent_node["parent"]["object"]
 
         # todo: testing
         for node in nodes_data:
             if node == parent_node:
-                node["object"] = object
+                node["object"] = obj
 
     # XChildSelector
     # create bone (used only as a container of children)
     elif x_type == "CS":
         children_num = read_short(fd)
 
-        object = armature.edit_bones.new(x_name)
-        object.head = (0, 0, 0)
-        object.tail = (0, 0, 1)
+        obj = armature.edit_bones.new(x_name)
+        obj.head = (0, 0, 0)
+        obj.tail = (0, 0, 1)
 
         if type(parent_node["object"]) == bpy.types.EditBone:
-            object.parent = parent_node["object"]
-            object.matrix = parent_node["object"].matrix.copy()
+            obj.parent = parent_node["object"]
+            obj.matrix = parent_node["object"].matrix.copy()
 
     # XShape or XSkinShape
     # create mesh
@@ -287,7 +287,7 @@ def read_xnode(fd, parent_node=None, armature=None):
             bm.to_mesh(md)
             bm.free()
 
-        mat = bpy.data.materials.new(name='Material')
+        mat = bpy.data.materials.new(name=x_name)
         mat_wrap = node_shader_utils.PrincipledBSDFWrapper(mat, is_readonly=False)
 
         # if it's a material
@@ -297,7 +297,7 @@ def read_xnode(fd, parent_node=None, armature=None):
             _mat_mirror_color = read_color(fd)
             _mat_diffuse_color = read_color(fd)
             _mat_specular_color = read_color(fd)
-            mat.specular_intensity = 1.0
+            # mat.specular_intensity = 1.0
             _mat_selfIllum_color = read_color(fd)
         else:
             _mat_diffuse_color = (1, 1, 1)
@@ -312,7 +312,7 @@ def read_xnode(fd, parent_node=None, armature=None):
                 image = load_image(texture_name, path)
             else:
                 image = bpy.data.images.get(texture_name)
-                
+
             if image:
                 tex.image = image
                 depth = image.depth
@@ -321,10 +321,45 @@ def read_xnode(fd, parent_node=None, armature=None):
                 nodetex.image = image
                 nodetex.texcoords = 'UV'
 
-                # if depth in {32, 128}:
-                #     mat.use_nodes = True
+                node_tree = mat.node_tree
+                nodes = node_tree.nodes
+
+                texture_node = nodes.get('Image Texture')
+                uv_map_node = nodes.new('ShaderNodeUVMap')
+                mapping_node = nodes.new('ShaderNodeMapping')
+
+                mapping_node.vector_type = 'TEXTURE'
+
+                node_tree.links.new(uv_map_node.outputs[0], mapping_node.inputs[0])
+                node_tree.links.new(mapping_node.outputs[0], texture_node.inputs[0])
+
+                if depth in {32, 128}:
+                    mat.blend_method = 'BLEND'
+
+                    output_node = nodes.get('Material Output')
+                    bsdf_node = nodes.get('Principled BSDF')
+                    mix_shader_node = nodes.new('ShaderNodeMixShader')
+                    transparent_node = nodes.new('ShaderNodeBsdfTransparent')
+
+                    node_tree.links.new(texture_node.outputs[1], mix_shader_node.inputs[0])
+                    node_tree.links.new(transparent_node.outputs[0], mix_shader_node.inputs[1])
+                    node_tree.links.new(bsdf_node.outputs[0], mix_shader_node.inputs[2])
+
+                    node_tree.links.new(mix_shader_node.outputs[0], output_node.inputs[0])
+
+                if parent_node['type'] == 'CS':
+                    mat.blend_method = 'BLEND'
 
         md.materials.append(mat)
+
+        # remove doubles
+        bm = bmesh.new()
+        bm.from_mesh(md)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts)
+        bm.to_mesh(md)
+        bm.free()
+    
+        md.validate()
         md.update()
 
         # XSkinShape
@@ -337,7 +372,7 @@ def read_xnode(fd, parent_node=None, armature=None):
             groups_names = [parent_node["name"]]
             groups_weights = [[1.0] for _ in range(vertices_num)]
 
-        object = { 'data': md, 'groups_names': groups_names, 'groups_weights': groups_weights }
+        obj = {'data': md, 'groups_names': groups_names, 'groups_weights': groups_weights}
 
     if not ndata:
         ndata = {
@@ -351,19 +386,19 @@ def read_xnode(fd, parent_node=None, armature=None):
             "jointorient": jointorient,
             "rotorient": rotorient,
             "parent": parent_node,
-            "object": object
+            "object": obj
         }
         nodes_data.append(ndata)
 
     # next children
     for _ in range(children_num):
-        read_xnode(fd, parent_node=ndata, armature=armature)
+        read_xnode(fd, context, parent_node=ndata, armature=armature)
 
     # return root node
     return ndata
 
 
-def load_xom3d_mesh(filepath, global_matrix):
+def load_xom3d_mesh(filepath, context, global_matrix):
     global path, nodes_data
     path = os.path.dirname(filepath)
 
@@ -372,14 +407,14 @@ def load_xom3d_mesh(filepath, global_matrix):
         assert file_type == "X3D", "Incorrect Xom3D Model format!"
 
         nodes_data = []
-        node_in = read_xnode(fd)
+        node_in = read_xnode(fd, context)
 
     if not node_in:
         return
 
-    view_layer = bpy.context.view_layer
+    view_layer = context.view_layer
     armature_object = node_in["object"]
-    
+
     # set up mesh objects
     bpy.ops.object.mode_set(mode='OBJECT')
     for node in nodes_data:
@@ -392,13 +427,14 @@ def load_xom3d_mesh(filepath, global_matrix):
         if parent_bone:
             mesh_object.matrix_local = parent_bone.matrix.copy()
 
+        mesh_object.scale = node["parent"]["scale"]
+
         mesh_object.parent = armature_object
         view_layer.active_layer_collection.collection.objects.link(mesh_object)
 
         modifier = mesh_object.modifiers.new(type='ARMATURE', name='Armature')
         modifier.object = armature_object
 
-        # todo:
         groups_names = node["object"]["groups_names"]
         groups_weights = node["object"]["groups_weights"]
         for i, g in enumerate(groups_names):
@@ -441,8 +477,8 @@ def load_xom3d_mesh(filepath, global_matrix):
     view_layer.update()
 
 
-def load_xom3d_animation(filepath, use_def_pose):
-    view_layer = bpy.context.view_layer
+def load_xom3d_animation(filepath, context, use_def_pose):
+    view_layer = context.view_layer
 
     armature_object = view_layer.objects.active
 
@@ -454,7 +490,7 @@ def load_xom3d_animation(filepath, use_def_pose):
         return
 
     bpy.ops.object.mode_set(mode='POSE')
-    
+
     # reset pose
     if use_def_pose:
         armature_object.animation_data_clear()
@@ -473,18 +509,20 @@ def load_xom3d_animation(filepath, use_def_pose):
                         mesh_object.hide_render = (i != 0)
 
     # reset texture offsets
-    # for obj in view_layer.objects:
-    #     if obj.parent == armature_object:
-    #         mat = obj.active_material
-    #         mat.animation_data_clear()
-    #         mat.texture_slots[0].offset = mathutils.Vector((0.0, 0.0, 0.0))
+    for obj in view_layer.objects:
+        if obj.parent == armature_object:
+            node_tree = obj.active_material.node_tree
+            node_tree.animation_data_clear()
+            mapping_node = node_tree.nodes.get('Mapping')
+            if mapping_node:
+                mapping_node.translation = mathutils.Vector((0.0, 0.0, 0.0))
 
     file = open(filepath, 'rb')
 
     anim_name = read_string(file)
     maxkey = read_float(file)
     num = read_short(file)
-    fps = bpy.context.scene.render.fps
+    fps = context.scene.render.fps
     last_frame = fps * maxkey
 
     loc_data, rot_data, scale_data, tex_data, child_data = {}, {}, {}, {}, {}
@@ -545,8 +583,8 @@ def load_xom3d_animation(filepath, use_def_pose):
 
     file.close()
 
-    bpy.context.scene.frame_start = 0
-    bpy.context.scene.frame_end = int(last_frame)
+    context.scene.frame_start = 0
+    context.scene.frame_end = int(last_frame)
 
     action = bpy.data.actions.new(anim_name)
 
@@ -660,6 +698,10 @@ def load_xom3d_animation(filepath, use_def_pose):
             p_x_ax = bone.parent.x_axis
             p_y_ax = bone.parent.y_axis
             p_z_ax = bone.parent.z_axis
+        else:
+            p_x_ax = (1, 0, 0)
+            p_y_ax = (0, 1, 0)
+            p_z_ax = (0, 0, 1)
 
         x_ax = bone.x_axis
         y_ax = bone.y_axis
@@ -707,31 +749,30 @@ def load_xom3d_animation(filepath, use_def_pose):
         b.scale = temp_scale[b]
 
     # texture animation
-    # todo:
-    # for obj_name, data in tex_data.items():
-    #     obj = view_layer.objects[obj_name]
-    #     mat = obj.active_material
+    for obj_name, data in tex_data.items():
+        obj = view_layer.objects[obj_name]
+        node_tree = obj.active_material.node_tree
 
-    #     obj_action = bpy.data.actions.new(mat.name)
-    #     group = action.groups.new(name=mat.name)
+        obj_action = bpy.data.actions.new(node_tree.name)
+        group = action.groups.new(name=node_tree.name)
 
-    #     for axis in (0, 1):
-    #         frames_data = data[axis]
+        for axis in (0, 1):
+            frames_data = data[axis]
 
-    #         if not frames_data:
-    #             continue
+            if not frames_data:
+                continue
 
-    #         curve = obj_action.fcurves.new(data_path='texture_slots[0].offset', index=axis)
-    #         curve.group = group
+            curve = obj_action.fcurves.new(data_path='nodes["Mapping"].translation', index=axis)
+            curve.group = group
 
-    #         frames_num = math.ceil((max(frames_data, key=lambda _f: _f[0])[0])) + 1
-    #         for k in range(frames_num):
-    #             val = obj.xom_base_tex[axis] + calculate_frame_value(k, frames_data)
-    #             curve.keyframe_points.add(1)
-    #             curve.keyframe_points[k].co = k, val
-    #             curve.keyframe_points[k].interpolation = 'LINEAR'
+            frames_num = math.ceil((max(frames_data, key=lambda _f: _f[0])[0])) + 1
+            for k in range(frames_num):
+                val = obj.xom_base_tex[axis] + calculate_frame_value(k, frames_data)
+                curve.keyframe_points.add(1)
+                curve.keyframe_points[k].co = k, -val
+                curve.keyframe_points[k].interpolation = 'LINEAR'
 
-    #     mat.animation_data_create().action = obj_action
+        node_tree.animation_data_create().action = obj_action
 
     # child selector animation (CS)
     for bone_name, data in child_data.items():
@@ -818,8 +859,8 @@ def load_xom3d_animation(filepath, use_def_pose):
 def load(context, filepath, *, use_def_pose, global_matrix=None):
     filepath_lc = filepath.lower()
     if filepath_lc.endswith('.xom3d'):
-        load_xom3d_mesh(filepath, global_matrix)
+        load_xom3d_mesh(filepath, context, global_matrix)
     elif filepath_lc.endswith('.xac'):
-        load_xom3d_animation(filepath, use_def_pose)
+        load_xom3d_animation(filepath, context, use_def_pose)
 
     return {'FINISHED'}
