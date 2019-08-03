@@ -335,6 +335,7 @@ def read_xnode(fd, context, parent_node=None, armature=None):
 
                 if depth in {32, 128}:
                     mat.blend_method = 'BLEND'
+                    mat.show_transparent_back = False
 
                     output_node = nodes.get('Material Output')
                     bsdf_node = nodes.get('Principled BSDF')
@@ -349,6 +350,7 @@ def read_xnode(fd, context, parent_node=None, armature=None):
 
                 if parent_node['type'] == 'CS':
                     mat.blend_method = 'BLEND'
+                    mat.show_transparent_back = False
 
         md.materials.append(mat)
         md.validate()
