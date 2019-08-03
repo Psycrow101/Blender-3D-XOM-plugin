@@ -351,14 +351,6 @@ def read_xnode(fd, context, parent_node=None, armature=None):
                     mat.blend_method = 'BLEND'
 
         md.materials.append(mat)
-
-        # remove doubles
-        bm = bmesh.new()
-        bm.from_mesh(md)
-        bmesh.ops.remove_doubles(bm, verts=bm.verts)
-        bm.to_mesh(md)
-        bm.free()
-    
         md.validate()
         md.update()
 
@@ -443,6 +435,12 @@ def load_xom3d_mesh(filepath, context, global_matrix):
                 if w[i] > 0:
                     vg.add([v], w[i], 'REPLACE')
 
+        # remove doubles
+        view_layer.objects.active = mesh_object
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.remove_doubles()
+        bpy.ops.object.mode_set(mode='OBJECT')
+
         # append mesh name to XChildSelector
         if node["parent"]["type"] == 'CS':
             parent_bone.xom_child_selector.add().child_name = mesh_object.name
@@ -451,6 +449,7 @@ def load_xom3d_mesh(filepath, context, global_matrix):
                 mesh_object.hide_render = True
 
     # set up pose bones
+    view_layer.objects.active = armature_object
     bpy.ops.object.mode_set(mode='POSE')
     for b in armature_object.pose.bones:
         b.rotation_mode = 'XYZ'
