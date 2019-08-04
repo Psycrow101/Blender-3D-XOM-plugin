@@ -257,7 +257,6 @@ def read_xnode(fd, context, parent_node=None, armature=None):
         for p in md.polygons:
             p.use_smooth = True
 
-        # todo: testing
         # if it's a color
         if read_bool(fd):
             colors = [read_color(fd) for _ in range(vertices_num)]
@@ -297,13 +296,11 @@ def read_xnode(fd, context, parent_node=None, armature=None):
             _mat_mirror_color = read_color(fd)
             _mat_diffuse_color = read_color(fd)
             _mat_specular_color = read_color(fd)
-            # mat.specular_intensity = 1.0
             _mat_selfIllum_color = read_color(fd)
         else:
             _mat_diffuse_color = (1, 1, 1)
 
         # if it's a texture
-        # todo:
         if read_bool(fd):
             texture_name = read_string(fd)
             tex = bpy.data.textures.get(texture_name)
@@ -392,7 +389,7 @@ def read_xnode(fd, context, parent_node=None, armature=None):
     return ndata
 
 
-def load_xom3d_mesh(filepath, context, global_matrix):
+def load_xom3d_mesh(filepath, context, remove_doubles, global_matrix):
     global path, nodes_data
     path = os.path.dirname(filepath)
 
@@ -437,11 +434,11 @@ def load_xom3d_mesh(filepath, context, global_matrix):
                 if w[i] > 0:
                     vg.add([v], w[i], 'REPLACE')
 
-        # remove doubles
-        view_layer.objects.active = mesh_object
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.remove_doubles()
-        bpy.ops.object.mode_set(mode='OBJECT')
+        if remove_doubles:
+            view_layer.objects.active = mesh_object
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.remove_doubles()
+            bpy.ops.object.mode_set(mode='OBJECT')
 
         # append mesh name to XChildSelector
         if node["parent"]["type"] == 'CS':
@@ -859,10 +856,10 @@ def load_xom3d_animation(filepath, context, use_def_pose):
     return {'FINISHED'}
 
 
-def load(context, filepath, *, use_def_pose, global_matrix=None):
+def load(context, filepath, *, use_def_pose, remove_doubles, global_matrix=None):
     filepath_lc = filepath.lower()
     if filepath_lc.endswith('.xom3d'):
-        return load_xom3d_mesh(filepath, context, global_matrix)
+        return load_xom3d_mesh(filepath, context, remove_doubles, global_matrix)
     elif filepath_lc.endswith('.xac'):
         return load_xom3d_animation(filepath, context, use_def_pose)
 

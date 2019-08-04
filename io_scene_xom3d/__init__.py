@@ -50,6 +50,12 @@ class ImportXom3D(bpy.types.Operator, ImportHelper):
         default=True,
     )
 
+    remove_doubles: BoolProperty(
+        name="Remove doubles vertices",
+        description="Remove doubles vertices",
+        default=True,
+    )
+
     def execute(self, context):
         from . import import_xom3d
 
