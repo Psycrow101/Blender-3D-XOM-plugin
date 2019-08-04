@@ -404,7 +404,7 @@ def load_xom3d_mesh(filepath, context, global_matrix):
         node_in = read_xnode(fd, context)
 
     if not node_in:
-        return
+        return {'CANCELLED'}
 
     view_layer = context.view_layer
     armature_object = node_in["object"]
@@ -476,6 +476,7 @@ def load_xom3d_mesh(filepath, context, global_matrix):
         o.select_set(o == armature_object)
 
     view_layer.update()
+    return {'FINISHED'}
 
 
 def load_xom3d_animation(filepath, context, use_def_pose):
@@ -484,11 +485,11 @@ def load_xom3d_animation(filepath, context, use_def_pose):
     armature_object = view_layer.objects.active
 
     if not armature_object:
-        return
+        return {'CANCELLED'}
 
     armature = armature_object.data
     if type(armature) != bpy.types.Armature:
-        return
+        return {'CANCELLED'}
 
     bpy.ops.object.mode_set(mode='POSE')
 
@@ -855,13 +856,14 @@ def load_xom3d_animation(filepath, context, use_def_pose):
     armature_object.animation_data_create().action = action
 
     bpy.ops.object.mode_set(mode='OBJECT')
+    return {'FINISHED'}
 
 
 def load(context, filepath, *, use_def_pose, global_matrix=None):
     filepath_lc = filepath.lower()
     if filepath_lc.endswith('.xom3d'):
-        load_xom3d_mesh(filepath, context, global_matrix)
+        return load_xom3d_mesh(filepath, context, global_matrix)
     elif filepath_lc.endswith('.xac'):
-        load_xom3d_animation(filepath, context, use_def_pose)
+        return load_xom3d_animation(filepath, context, use_def_pose)
 
-    return {'FINISHED'}
+    return {'CANCELLED'}
