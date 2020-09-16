@@ -18,8 +18,8 @@ from bpy_extras.io_utils import (
 bl_info = {
     "name": "Import Xom 3D Model / Animation",
     "author": "Psycrow",
-    "version": (1, 2, 1),
-    "blender": (2, 80, 0),
+    "version": (1, 2, 2),
+    "blender": (2, 81, 0),
     "location": "File > Import-Export",
     "description": "Import Xom 3D Model / Animation from XomView format (.xom3d, .xac)",
     "warning": "",

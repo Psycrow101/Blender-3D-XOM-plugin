@@ -514,7 +514,7 @@ def load_xom3d_animation(filepath, context, use_def_pose):
             node_tree.animation_data_clear()
             mapping_node = node_tree.nodes.get('Mapping')
             if mapping_node:
-                mapping_node.translation = mathutils.Vector((0.0, 0.0, 0.0))
+                mapping_node.inputs['Location'].default_value = mathutils.Vector((0.0, 0.0, 0.0))
 
     file = open(filepath, 'rb')
 
@@ -761,7 +761,7 @@ def load_xom3d_animation(filepath, context, use_def_pose):
             if not frames_data:
                 continue
 
-            curve = obj_action.fcurves.new(data_path='nodes["Mapping"].translation', index=axis)
+            curve = obj_action.fcurves.new(data_path='nodes["Mapping"].inputs["Location"].default_value', index=axis)
             curve.group = group
 
             frames_num = math.ceil((max(frames_data, key=lambda _f: _f[0])[0])) + 1
