@@ -252,7 +252,8 @@ def read_xnode(fd, context, parent_node=None, armature=None):
         # if it's a normal vector
         if read_bool(fd):
             for i in range(vertices_num):
-                md.vertices[i].normal = read_vector(fd)
+                fd.seek(12, os.SEEK_CUR)
+                # md.vertices[i].normal = read_vector(fd)
 
         for p in md.polygons:
             p.use_smooth = True
