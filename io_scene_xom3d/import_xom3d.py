@@ -109,7 +109,7 @@ def read_color(fd):
 
 
 def read_xnode(fd, context, parent_node=None, armature=None):
-    global path, nodes_data
+    global path, nodes_data, use_native_normals
 
     x_type = read_string(fd)
 
@@ -251,12 +251,12 @@ def read_xnode(fd, context, parent_node=None, armature=None):
 
         # if it's a normal vector
         if read_bool(fd):
-            for i in range(vertices_num):
-                fd.seek(12, os.SEEK_CUR)
-                # md.vertices[i].normal = read_vector(fd)
-
-        for p in md.polygons:
-            p.use_smooth = True
+            normals = [read_vector(fd) for _ in range(vertices_num)]
+            if use_native_normals:
+                md.normals_split_custom_set_from_vertices(normals)
+            else:
+                for p in md.polygons:
+                    p.use_smooth = True
 
         # if it's a color
         if read_bool(fd):
@@ -390,9 +390,10 @@ def read_xnode(fd, context, parent_node=None, armature=None):
     return ndata
 
 
-def load_xom3d_mesh(filepath, context, remove_doubles, global_matrix):
-    global path, nodes_data
+def load_xom3d_mesh(filepath, context, use_auto_smooth, remove_doubles, global_matrix):
+    global path, nodes_data, use_native_normals
     path = os.path.dirname(filepath)
+    use_native_normals = use_auto_smooth
 
     with open(filepath, 'rb') as fd:
         file_type = read_string(fd)
@@ -434,6 +435,9 @@ def load_xom3d_mesh(filepath, context, remove_doubles, global_matrix):
             for v, w in enumerate(groups_weights):
                 if w[i] > 0:
                     vg.add([v], w[i], 'REPLACE')
+
+        if use_auto_smooth:
+            mesh_object.data.use_auto_smooth = True
 
         if remove_doubles:
             view_layer.objects.active = mesh_object
@@ -857,10 +861,10 @@ def load_xom3d_animation(filepath, context, use_def_pose):
     return {'FINISHED'}
 
 
-def load(context, filepath, *, use_def_pose, remove_doubles, global_matrix=None):
+def load(context, filepath, *, use_def_pose, use_auto_smooth, remove_doubles, global_matrix=None):
     filepath_lc = filepath.lower()
     if filepath_lc.endswith('.xom3d'):
-        return load_xom3d_mesh(filepath, context, remove_doubles, global_matrix)
+        return load_xom3d_mesh(filepath, context, use_auto_smooth, remove_doubles, global_matrix)
     elif filepath_lc.endswith('.xac'):
         return load_xom3d_animation(filepath, context, use_def_pose)
 

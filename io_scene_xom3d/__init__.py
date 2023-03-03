@@ -1,7 +1,6 @@
 import bpy
 from bpy.props import (
     BoolProperty,
-    FloatProperty,
     StringProperty,
     FloatVectorProperty,
     CollectionProperty,
@@ -47,6 +46,12 @@ class ImportXom3D(bpy.types.Operator, ImportHelper):
     use_def_pose: BoolProperty(
         name="Reset pose",
         description="Reset pose to default before loading animation",
+        default=True,
+    )
+
+    use_auto_smooth: BoolProperty(
+        name="Use auto smooth",
+        description="Use custom normals from mesh with auto smoothing",
         default=True,
     )
 
